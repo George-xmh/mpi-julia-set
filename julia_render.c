@@ -1,33 +1,16 @@
 /*
  * julia_render.c
- * --------------
- * OpenGL / GLUT renderer for Julia-set binary files produced by
- * julia_mpi.c.  Reads the escape-time grid and maps each escape-time
- * band to an RGB colour, then saves a high-resolution JPEG via libjpeg.
+ * George [Last Name] - [Course Code] - [Date]
  *
- * Colour scheme (10 bands of 5 iterations each, then "inside" = black):
- *   band 0  : iter  1– 5   → warm red
- *   band 1  : iter  6–10   → orange
- *   band 2  : iter 11–15   → yellow-gold
- *   band 3  : iter 16–20   → lime green
- *   band 4  : iter 21–25   → teal
- *   band 5  : iter 26–30   → sky blue
- *   band 6  : iter 31–35   → medium blue
- *   band 7  : iter 36–40   → violet
- *   band 8  : iter 41–45   → magenta
- *   band 9  : iter 46–50   → pink
- *   ≥ 50 / max_iter (inside) → black
+ * Reads the binary file produced by julia_mpi.c and renders it
+ * as a colour image using OpenGL, then saves it as a JPEG.
  *
- * Compile:
- *   gcc -O2 -o julia_render julia_render.c \
- *       -lGL -lGLU -lglut -ljpeg -lm
+ * Colour scheme: escape time is split into bands of 5 iterations each.
+ * Points that never escape (inside the Julia set) are coloured black.
+ * The 10 bands go from red (escaped quickly) to pink (escaped slowly).
  *
- * Run:
- *   ./julia_render -i julia.bin -o julia.jpg [-w 1000] [-h 1000]
- *
- * Authors : [Your Name]
- * Course  : [Course Code]
- * Date    : [Date]
+ * Compile:  gcc -O2 -o julia_render julia_render.c -lGL -lGLU -lglut -ljpeg -lm
+ * Run:      ./julia_render -i julia.bin -o julia.jpg -w 2000 -H 2000
  */
 
 #include <stdio.h>
@@ -47,71 +30,60 @@
 
 #include <jpeglib.h>
 
-/* ------------------------------------------------------------------ */
-/*  Colour table – 10 escape bands + 1 "inside" colour                */
-/* ------------------------------------------------------------------ */
-#define NUM_BANDS 10
+#define NUM_BANDS  10
+#define BAND_WIDTH  5   /* iterations per colour band */
 
-/* Each row: { R, G, B } in [0,255] */
+/* RGB colours for each escape-time band, fastest escape first */
 static const unsigned char BAND_COLORS[NUM_BANDS][3] = {
-    { 220,  30,  30 },   /* band 0:  1– 5  warm red        */
-    { 240, 120,   0 },   /* band 1:  6–10  orange           */
-    { 230, 210,   0 },   /* band 2: 11–15  yellow-gold      */
-    {  80, 200,  50 },   /* band 3: 16–20  lime green       */
-    {   0, 180, 140 },   /* band 4: 21–25  teal             */
-    {  30, 160, 240 },   /* band 5: 26–30  sky blue         */
-    {  40,  80, 220 },   /* band 6: 31–35  medium blue      */
-    { 130,  50, 200 },   /* band 7: 36–40  violet           */
-    { 210,  30, 180 },   /* band 8: 41–45  magenta          */
-    { 255, 130, 180 },   /* band 9: 46–50  pink             */
+    { 220,  30,  30 },   /* 1-5    red    */
+    { 240, 120,   0 },   /* 6-10   orange */
+    { 230, 210,   0 },   /* 11-15  yellow */
+    {  80, 200,  50 },   /* 16-20  green  */
+    {   0, 180, 140 },   /* 21-25  teal   */
+    {  30, 160, 240 },   /* 26-30  sky    */
+    {  40,  80, 220 },   /* 31-35  blue   */
+    { 130,  50, 200 },   /* 36-40  violet */
+    { 210,  30, 180 },   /* 41-45  magenta*/
+    { 255, 130, 180 },   /* 46-50  pink   */
 };
 
-static const unsigned char INSIDE_COLOR[3] = { 0, 0, 0 };  /* black   */
-#define BAND_WIDTH 5     /* iterations per colour band                  */
+static const unsigned char INSIDE_COLOR[3] = { 0, 0, 0 };  /* black = inside set */
 
-/* ------------------------------------------------------------------ */
-/*  Global state                                                        */
-/* ------------------------------------------------------------------ */
-static int   *g_escape  = NULL;  /* flat N×N escape-time array          */
-static int    g_N       = 0;     /* grid dimension                      */
-static int    g_maxiter = 0;     /* maximum iteration count             */
-static int    g_win_w   = 1000;  /* OpenGL window width  (pixels)       */
-static int    g_win_h   = 1000;  /* OpenGL window height (pixels)       */
-static char   g_outjpg[256] = "julia_out.jpg";
+/* globals loaded from the binary file */
+static int  *g_escape  = NULL;
+static int   g_N       = 0;
+static int   g_maxiter = 0;
 
-/* ------------------------------------------------------------------ */
-/*  Map escape time → RGB                                              */
-/* ------------------------------------------------------------------ */
+/* output settings */
+static int   g_win_w = 1000;
+static int   g_win_h = 1000;
+static char  g_outjpg[256] = "julia_out.jpg";
+
+/* pick the right colour for a given escape time */
 static void escape_to_rgb(int et, unsigned char *r,
                            unsigned char *g, unsigned char *b)
 {
-    if (et >= g_maxiter) {          /* inside the filled Julia set      */
+    if (et >= g_maxiter) {
+        /* point stayed bounded — inside the filled Julia set */
         *r = INSIDE_COLOR[0];
         *g = INSIDE_COLOR[1];
         *b = INSIDE_COLOR[2];
         return;
     }
-    /* zero-based band index (clamp to last band if beyond table)       */
     int band = (et - 1) / BAND_WIDTH;
     if (band >= NUM_BANDS) band = NUM_BANDS - 1;
-
     *r = BAND_COLORS[band][0];
     *g = BAND_COLORS[band][1];
     *b = BAND_COLORS[band][2];
 }
 
-/* ------------------------------------------------------------------ */
-/*  Build an RGB pixel buffer from the escape-time grid                */
-/*  Output: width × height × 3 bytes (row 0 = top of image)           */
-/* ------------------------------------------------------------------ */
+/* build a width x height RGB buffer by scaling the NxN grid to fit */
 static unsigned char *build_rgb_buffer(int width, int height)
 {
-    unsigned char *buf = (unsigned char *)malloc(
-                             (size_t)width * height * 3);
+    unsigned char *buf = (unsigned char *)malloc((size_t)width * height * 3);
     if (!buf) return NULL;
 
     for (int py = 0; py < height; py++) {
-        /* Map pixel row py to grid row gy (nearest-neighbour scaling)  */
         int gy = (int)((double)py / height * g_N);
         if (gy >= g_N) gy = g_N - 1;
 
@@ -132,9 +104,7 @@ static unsigned char *build_rgb_buffer(int width, int height)
     return buf;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Save RGB buffer to JPEG via libjpeg                                */
-/* ------------------------------------------------------------------ */
+/* write the RGB buffer to a JPEG file using libjpeg */
 static int save_jpeg(const char *filename,
                      unsigned char *data,
                      int width, int height, int quality)
@@ -171,9 +141,7 @@ static int save_jpeg(const char *filename,
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  GLUT display callback                                              */
-/* ------------------------------------------------------------------ */
+/* GLUT calls this to draw the window — we also save the JPEG here */
 static void display(void)
 {
     glClear(GL_COLOR_BUFFER_BIT);
@@ -181,26 +149,21 @@ static void display(void)
     unsigned char *rgb = build_rgb_buffer(g_win_w, g_win_h);
     if (!rgb) { fprintf(stderr, "build_rgb_buffer failed\n"); return; }
 
-    /* Draw as a single OpenGL texture quad (fastest path)             */
-    glRasterPos2i(0, 0);
-    /* glDrawPixels origin is bottom-left; our buffer is top-left       */
-    /* → flip vertically when drawing                                   */
+    /* glDrawPixels starts from bottom-left, our buffer is top-left,
+       so flip vertically with glPixelZoom */
     glPixelZoom(1.0f, -1.0f);
     glRasterPos2i(0, g_win_h - 1);
     glDrawPixels(g_win_w, g_win_h, GL_RGB, GL_UNSIGNED_BYTE, rgb);
     glFlush();
 
-    /* Save JPEG */
-    printf("Saving %s …\n", g_outjpg);
+    printf("Saving %s ...\n", g_outjpg);
     if (save_jpeg(g_outjpg, rgb, g_win_w, g_win_h, 95) == 0)
-        printf("Saved  %s  (%d × %d)\n", g_outjpg, g_win_w, g_win_h);
+        printf("Saved %s (%d x %d)\n", g_outjpg, g_win_w, g_win_h);
 
     free(rgb);
 }
 
-/* ------------------------------------------------------------------ */
-/*  GLUT keyboard callback – press 'q' or ESC to quit                  */
-/* ------------------------------------------------------------------ */
+/* press q or ESC to exit */
 static void keyboard(unsigned char key, int x, int y)
 {
     (void)x; (void)y;
@@ -210,9 +173,7 @@ static void keyboard(unsigned char key, int x, int y)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Read binary file written by julia_mpi.c                           */
-/* ------------------------------------------------------------------ */
+/* read the binary file written by julia_mpi.c */
 static int read_binary(const char *filename)
 {
     FILE *fp = fopen(filename, "rb");
@@ -220,10 +181,11 @@ static int read_binary(const char *filename)
 
     if (fread(&g_N,       sizeof(int), 1, fp) != 1 ||
         fread(&g_maxiter, sizeof(int), 1, fp) != 1) {
-        fprintf(stderr, "read_binary: header read failed\n");
-        fclose(fp); return -1;
+        fprintf(stderr, "failed to read header\n");
+        fclose(fp);
+        return -1;
     }
-    printf("Reading grid %d × %d  (max_iter=%d) from '%s'\n",
+    printf("reading %d x %d grid (max_iter=%d) from %s\n",
            g_N, g_N, g_maxiter, filename);
 
     g_escape = (int *)malloc((size_t)g_N * g_N * sizeof(int));
@@ -231,31 +193,23 @@ static int read_binary(const char *filename)
 
     size_t n = (size_t)g_N * g_N;
     if (fread(g_escape, sizeof(int), n, fp) != n) {
-        fprintf(stderr, "read_binary: data read failed\n");
-        free(g_escape); g_escape = NULL;
-        fclose(fp); return -1;
+        fprintf(stderr, "failed to read grid data\n");
+        free(g_escape);
+        g_escape = NULL;
+        fclose(fp);
+        return -1;
     }
     fclose(fp);
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Usage                                                              */
-/* ------------------------------------------------------------------ */
 static void usage(const char *prog)
 {
     fprintf(stderr,
-        "Usage: %s -i <input.bin> [-o <output.jpg>] [-w <width>] [-H <height>]\n"
-        "  -i  input binary file (from julia_mpi)\n"
-        "  -o  output JPEG file  (default: julia_out.jpg)\n"
-        "  -w  image width  in pixels (default: 1000)\n"
-        "  -H  image height in pixels (default: 1000)\n",
+        "Usage: %s -i <input.bin> [-o <output.jpg>] [-w <width>] [-H <height>]\n",
         prog);
 }
 
-/* ================================================================== */
-/*  MAIN                                                                */
-/* ================================================================== */
 int main(int argc, char *argv[])
 {
     char infile[256] = "";
@@ -275,13 +229,13 @@ int main(int argc, char *argv[])
     }
 
     if (infile[0] == '\0') {
-        fprintf(stderr, "Error: no input file specified.\n");
-        usage(argv[0]); return 1;
+        fprintf(stderr, "Error: no input file given.\n");
+        usage(argv[0]);
+        return 1;
     }
 
     if (read_binary(infile) != 0) return 1;
 
-    /* ---- GLUT setup ------------------------------------------------ */
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);
     glutInitWindowSize(g_win_w, g_win_h);

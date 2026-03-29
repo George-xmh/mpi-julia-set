@@ -1,36 +1,31 @@
-# Makefile for Julia-set MPI project
-# ====================================
-# Targets:
-#   all           – build both programs
-#   julia_mpi     – MPI computation program
-#   julia_render  – OpenGL / JPEG renderer
-#   clean         – remove binaries and .bin files
+# Makefile - builds both the MPI compute program and the OpenGL renderer
+# George [Last Name] - [Course Code]
 #
-# Tested on SHARCNET (Graham / Niagara) with:
-#   module load intel/2020  intelmpi/2019  freeglut  libjpeg-turbo
+# Usage:
+#   make              - build both
+#   make julia_mpi    - build just the compute program
+#   make julia_render - build just the renderer
+#   make clean        - remove binaries
+#
+# On SHARCNET load these modules first:
+#   module load intel/2020
+#   module load intelmpi/2019
+#   module load freeglut
+#   module load libjpeg-turbo
 
-CC      = gcc
-MPICC   = mpicc
-
-# ---------- Compiler flags ----------
-CFLAGS_COMMON = -O2 -Wall -Wextra -std=c99
-CFLAGS_MPI    = $(CFLAGS_COMMON)
-CFLAGS_GL     = $(CFLAGS_COMMON)
-
-# ---------- Linker flags ----------
-# Adjust paths if modules place libraries elsewhere
-LDFLAGS_MPI = -lm
-LDFLAGS_GL  = -lGL -lGLU -lglut -ljpeg -lm
+CC    = gcc
+MPICC = mpicc
+CFLAGS = -O2 -Wall -std=c99
 
 .PHONY: all clean
 
 all: julia_mpi julia_render
 
 julia_mpi: julia_mpi.c
-	$(MPICC) $(CFLAGS_MPI) -o $@ $< $(LDFLAGS_MPI)
+	$(MPICC) $(CFLAGS) -o $@ $< -lm
 
 julia_render: julia_render.c
-	$(CC) $(CFLAGS_GL) -o $@ $< $(LDFLAGS_GL)
+	$(CC) $(CFLAGS) -o $@ $< -lGL -lGLU -lglut -ljpeg -lm
 
 clean:
 	rm -f julia_mpi julia_render *.bin *.jpg
