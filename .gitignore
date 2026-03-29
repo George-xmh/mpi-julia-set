@@ -1,0 +1,17 @@
+# compiled binaries
+julia_mpi
+julia_render
+
+# output data and images
+*.bin
+*.jpg
+*.jpeg
+
+# SLURM output logs
+*.out
+*.err
+
+# editor cruft
+*.swp
+*.swo
+.DS_Store
