@@ -1,7 +1,5 @@
 /*
  * julia_mpi.c
- * George [Last Name] - [Course Code] - [Date]
- *
  * Computes filled Julia sets in parallel using MPI.
  * Supports Qc(z) = z^2 + c  and  Tc(z) = z^3 + c.
  *
