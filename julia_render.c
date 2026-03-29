@@ -1,6 +1,5 @@
 /*
  * julia_render.c
- * George [Last Name] - [Course Code] - [Date]
  *
  * Reads the binary file produced by julia_mpi.c and renders it
  * as a colour image using OpenGL, then saves it as a JPEG.
